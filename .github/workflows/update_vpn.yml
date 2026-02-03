@@ -1,0 +1,38 @@
+name: Auto Update VPN Gate
+
+on:
+  schedule:
+    - cron: '0 * * * *' # <--- SỬA DÒNG NÀY (Chạy vào phút thứ 0 của mỗi giờ)
+  workflow_dispatch:      # Giữ lại dòng này để bạn vẫn có thể bấm nút chạy thủ công nếu muốn
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Run Scraper Script
+        run: python main.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "VPN Auto Bot"
+          git config --global user.email "bot@github.com"
+          git add .
+          # Chỉ commit nếu có thay đổi để tránh lỗi
+          git diff-index --quiet HEAD || git commit -m "Hourly VPN Update: $(date)"
+          git push
