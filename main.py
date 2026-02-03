@@ -2,22 +2,25 @@ import requests
 import csv
 import base64
 import os
-import time
 import shutil
 from io import StringIO
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH CHO NETLIFY ---
+# Netlify sẽ publish thư mục 'public'
+PUBLISH_DIR = "public"
+SAVE_DIR_NAME = "ovpn_files"
+SAVE_DIR = os.path.join(PUBLISH_DIR, SAVE_DIR_NAME)
+HTML_FILE = os.path.join(PUBLISH_DIR, "index.html")
+
 VPN_API = "http://www.vpngate.net/api/iphone/"
 ISP_API = "http://ip-api.com/json/{}"
-SAVE_DIR = "ovpn_files"
-README_FILE = "README.md"
 CUSTOM_CIPHER = "data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC"
 
 def get_servers():
-    print(f"[*] Đang tải danh sách server...")
+    print("Downloading server list...")
     try:
-        res = requests.get(VPN_API, timeout=20)
+        res = requests.get(VPN_API, timeout=30)
         raw = []
         for line in res.text.splitlines():
             line = line.strip()
@@ -29,15 +32,14 @@ def get_servers():
         if raw and "HostName" not in raw[0]:
             header = "HostName,IP,Score,Ping,Speed,CountryLong,CountryShort,NumVpnSessions,Uptime,TotalUsers,TotalTraffic,LogType,Operator,Message,OpenVPN_ConfigData_Base64"
             raw.insert(0, header)
-            
         return list(csv.DictReader(StringIO("\n".join(raw))))
     except Exception as e:
-        print(f"[!] Lỗi tải VPN API: {e}")
+        print(f"Error downloading: {e}")
         return []
 
 def get_isp(ip):
     try:
-        res = requests.get(ISP_API.format(ip), timeout=3).json()
+        res = requests.get(ISP_API.format(ip), timeout=5).json()
         return res.get('isp', 'Unknown').replace(" ", "")
     except:
         return "Unknown"
@@ -52,7 +54,7 @@ def save_ovpn(server):
         isp = get_isp(ip)
         
         filename = f"JP_{isp}_{ip}_{speed:.1f}Mbps.ovpn"
-        path = os.path.join(SAVE_DIR, filename)
+        filepath = os.path.join(SAVE_DIR, filename)
 
         raw_b64 = server['OpenVPN_ConfigData_Base64']
         decoded_config = base64.b64decode(raw_b64).decode('utf-8')
@@ -60,7 +62,7 @@ def save_ovpn(server):
         
         final_data = f"# JP | {isp} | {ip} | {speed:.1f}Mbps\n{CUSTOM_CIPHER}\n{content_cleaned}"
         
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(final_data)
         
         return {
@@ -74,62 +76,102 @@ def save_ovpn(server):
     except:
         return None
 
-def update_readme(success_list):
+def update_html(success_list):
+    # Giờ VN
     tz_vn = timezone(timedelta(hours=7))
-    now = datetime.now(tz_vn).strftime("%H:%M %d/%m")
+    time_str = datetime.now(tz_vn).strftime("%H:%M %d/%m/%Y")
     
-    # --- CẤU HÌNH BẢNG ---
-    # Đã xóa cột Country
-    # ISP Name: Căn trái (:---|)
-    # Các cột khác: Căn giữa (:---:)
-    
-    md_content = f"""# 🇯🇵 VPN Gate List (JP)
-*Updated: {now} (GMT+7) | Servers: {len(success_list)}*
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Japan VPN List</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            body {{ background-color: #f0f2f5; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
+            .container {{ max-width: 900px; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }}
+            h1 {{ color: #1a1a1a; font-weight: 700; font-size: 1.8rem; margin-bottom: 0; }}
+            .badge-isp {{ background-color: #e4e6eb; color: #050505; font-weight: 600; font-size: 0.8rem; padding: 4px 8px; border-radius: 6px; }}
+            .btn-dl {{ font-size: 0.85rem; font-weight: 500; }}
+            td {{ vertical-align: middle; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1>🇯🇵 JP VPN Gate</h1>
+                <div class="text-end">
+                    <div class="text-muted small">Updated: {time_str}</div>
+                    <div class="badge bg-success">{len(success_list)} Servers</div>
+                </div>
+            </div>
 
-| Hostname | IP | ISP Name | Ping (ms) | Speed (Mbps) | Download |
-|:---:|:---:|:---|:---:|:---:|:---:|
-"""
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Hostname / IP</th>
+                            <th>ISP</th>
+                            <th class="text-center">Ping</th>
+                            <th class="text-center">Speed</th>
+                            <th class="text-end">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    """
     
     for item in success_list:
-        relative_link = f"./{SAVE_DIR}/{item['filename']}"
-        
-        try:
-            ping_val = int(item['ping'])
-        except:
-            ping_val = 0
-            
-        speed_val = f"{item['speed']:.1f}"
-        
-        # Format ISP: Chữ nhỏ + In đậm
-        isp_display = f"**<small>{item['isp']}</small>**"
-        
-        row = f"| {item['hostname']} | {item['ip']} | {isp_display} | {ping_val} | {speed_val} | [📥]({relative_link}) |\n"
-        md_content += row
+        link = f"./{SAVE_DIR_NAME}/{item['filename']}"
+        html_content += f"""
+                        <tr>
+                            <td>
+                                <div class="fw-bold text-dark">{item['hostname']}</div>
+                                <div class="text-muted small">{item['ip']}</div>
+                            </td>
+                            <td><span class="badge-isp">{item['isp']}</span></td>
+                            <td class="text-center text-muted">{item['ping']} ms</td>
+                            <td class="text-center fw-bold" style="color: #218838">{item['speed']:.1f} Mbps</td>
+                            <td class="text-end">
+                                <a href="{link}" class="btn btn-primary btn-sm btn-dl" download>Download</a>
+                            </td>
+                        </tr>
+        """
+
+    html_content += """
+                    </tbody>
+                </table>
+            </div>
+            <div class="text-center mt-4 text-muted small">
+                Deployed on Netlify
+            </div>
+        </div>
+    </body>
+    </html>
+    """
     
-    md_content += "\n*Auto-updated by GitHub Actions*"
-    
-    with open(README_FILE, 'w', encoding='utf-8') as f:
-        f.write(md_content)
-    print("[*] Đã cập nhật README.md")
+    with open(HTML_FILE, 'w', encoding='utf-8') as f:
+        f.write(html_content)
 
 def main():
-    if os.path.exists(SAVE_DIR): shutil.rmtree(SAVE_DIR)
+    # Tạo thư mục public nếu chưa có
+    if os.path.exists(PUBLISH_DIR):
+        shutil.rmtree(PUBLISH_DIR)
     os.makedirs(SAVE_DIR)
-    
+            
     servers = get_servers()
     jp_list = sorted([s for s in servers if s['CountryShort'] == 'JP'], 
                      key=lambda x: int(x['Speed']), reverse=True)
     
-    print(f"[*] Tìm thấy {len(jp_list)} server JP. Bắt đầu xử lý...")
-
     success_items = []
-    for s in jp_list[:100]: 
-        result = save_ovpn(s)
-        if result: success_items.append(result)
-        time.sleep(1)
-
-    update_readme(success_items)
-    print(f"[*] Xong!")
+    # Lấy 80 server thôi cho nhanh build
+    for s in jp_list[:80]:
+        res = save_ovpn(s)
+        if res: success_items.append(res)
+        
+    update_html(success_items)
+    print("Build Success!")
 
 if __name__ == "__main__":
     main()
